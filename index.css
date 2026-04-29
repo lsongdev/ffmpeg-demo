@@ -1,1 +1,199 @@
 @import url(https://lsong.org/css/stylesheet.css);
+
+body {
+  max-width: 768px;
+}
+
+section {
+  margin: 16px 0;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+input[type="text"],
+input[type="file"] {
+  width: 100%;
+  padding: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  color: inherit;
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+video, audio {
+  margin: 10px 0;
+}
+
+.presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.presets button {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid #ddd;
+  color: inherit;
+  cursor: pointer;
+}
+
+.presets button.active {
+  color: #fff;
+  border-color: #6366f1;
+  background: #6366f1;
+}
+
+.quick-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.quick-btns button {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  background: transparent;
+  border: 1px solid #ddd;
+  color: #666;
+  cursor: pointer;
+}
+
+.quick-btns button:hover {
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
+.quick-btns button.active {
+  border-color: #6366f1;
+  background: #6366f1;
+  color: #fff;
+}
+
+.run-btn {
+  width: 100%;
+  padding: 12px;
+  background: #6366f1;
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.run-btn:disabled {
+  background: #333;
+  cursor: not-allowed;
+}
+
+.file-info {
+  font-size: 13px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.command {
+  padding: 8px;
+  border: 1px solid #ddd;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: #10b981;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.progress {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #999;
+}
+
+.bar {
+  height: 4px;
+  background: #eee;
+  margin-top: 4px;
+}
+
+.bar > div {
+  height: 100%;
+  background: #6366f1;
+}
+
+.output-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.output-info span {
+  color: #999;
+  font-size: 13px;
+}
+
+.btn {
+  display: inline-block;
+  padding: 6px 16px;
+  background: #6366f1;
+  color: #fff;
+  text-decoration: none;
+  font-size: 13px;
+  border: none;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #4f46e5;
+}
+
+.logs {
+  padding: 8px;
+  border: 1px solid #ddd;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: #999;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.loading,
+.error {
+  padding: 20px;
+  text-align: center;
+  color: #999;
+}
+
+.error {
+  color: #ef4444;
+}
+
+.footer {
+  margin-top: 32px;
+  padding: 16px 0;
+  border-top: 1px solid #ddd;
+  font-size: 13px;
+  color: #999;
+}
+
+.footer a {
+  color: #6366f1;
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
