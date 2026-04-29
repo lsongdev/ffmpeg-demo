@@ -238,6 +238,9 @@ const App = () => {
   const [error, setError] = useState(null);
   const inputRef = useRef(null);
 
+  const [screenshots, setScreenshots] = useState([]);
+  const [loadingThumbs, setLoadingThumbs] = useState(false);
+
   useEffect(() => {
     (async () => {
       try {
@@ -256,6 +259,61 @@ const App = () => {
       setLoading(false);
     })();
   }, []);
+
+  const getVideoDuration = (file) => {
+    return new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        URL.revokeObjectURL(video.src);
+        resolve(video.duration);
+      };
+      video.src = URL.createObjectURL(file);
+    });
+  };
+
+  const generateThumbnails = async (file, ff) => {
+    if (!file || !ff || !file.type.startsWith('video/')) return;
+
+    setLoadingThumbs(true);
+    setScreenshots([]);
+
+    const inputName = 'thumb_input' + getFileExt(file.name);
+    const count = 12;
+
+    try {
+      const duration = await getVideoDuration(file);
+      if (!duration || duration < 1) {
+        setLoadingThumbs(false);
+        return;
+      }
+
+      const interval = duration / count;
+      const timestamps = Array.from({ length: count }, (_, i) => +(interval * (i + 0.5)).toFixed(1));
+
+      await ff.writeFile(inputName, await fetchFile(file));
+
+      const thumbs = [];
+      for (const t of timestamps) {
+        try {
+          if (t >= duration) break;
+          await ff.exec(['-ss', t.toString(), '-i', inputName, '-vframes', '1', `thumb_${t}.jpg`]);
+          const data = await ff.readFile(`thumb_${t}.jpg`);
+          if (data && data.length > 0) {
+            const blob = new Blob([data.buffer], { type: 'image/jpeg' });
+            thumbs.push({ t, url: URL.createObjectURL(blob) });
+          }
+          await ff.deleteFile(`thumb_${t}.jpg`);
+        } catch (e) {}
+      }
+
+      await ff.deleteFile(inputName);
+      setScreenshots(thumbs);
+    } catch (e) {
+      console.error('Thumbnail generation failed', e);
+    }
+    setLoadingThumbs(false);
+  };
 
   const applyPreset = (p) => {
     setPreset(p);
@@ -365,11 +423,25 @@ const App = () => {
               setInputFile(e.target.files[0]);
               setOutputUrl(null);
               setOutputInfo(null);
+              if (e.target.files[0]) {
+                generateThumbnails(e.target.files[0], ffmpeg);
+              }
             },
           }),
           inputFile && h('div', { className: 'file-info' },
             inputFile.name, ' ', formatFileSize(inputFile.size)
-          )
+          ),
+          
+          // Thumbnails
+          loadingThumbs && h('div', { className: 'thumb-strip loading' }, 'Generating thumbnails...'),
+          !loadingThumbs && screenshots.length > 0 && h('div', { className: 'thumb-strip' },
+            ...screenshots.map((thumb) =>
+              h('div', { className: 'thumb-item' },
+                h('img', { src: thumb.url }),
+                h('span', null, thumb.t + 's')
+              )
+            )
+          ),
         ),
 
         // global options

@@ -1,7 +1,7 @@
 @import url(https://lsong.org/css/stylesheet.css);
 
 body {
-  max-width: 768px;
+  max-width: 900px;
 }
 
 section {
@@ -30,10 +30,6 @@ input[type="file"] {
 input[type="text"]:focus {
   outline: none;
   border-color: #6366f1;
-}
-
-video, audio {
-  margin: 10px 0;
 }
 
 .presets {
@@ -105,6 +101,44 @@ video, audio {
   margin-top: 4px;
 }
 
+.thumb-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 12px 0;
+  margin-bottom: 8px;
+  scrollbar-width: thin;
+}
+
+.thumb-strip.loading {
+  color: #999;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.thumb-item {
+  flex-shrink: 0;
+  width: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.thumb-item img {
+  width: 100px;
+  height: 60px;
+  object-fit: cover;
+  background: #111;
+  border-radius: 4px;
+}
+
+.thumb-item span {
+  font-size: 11px;
+  color: #999;
+  font-family: monospace;
+}
+
 .command {
   padding: 8px;
   border: 1px solid #ddd;
@@ -138,6 +172,7 @@ video, audio {
   gap: 12px;
   flex-wrap: wrap;
   justify-content: space-between;
+  margin: 10px 0;
 }
 
 .output-info span {
