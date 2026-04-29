@@ -5,6 +5,15 @@ import { fetchFile, toBlobURL } from './ffmpeg/util/index.js';
 
 const baseURL = './ffmpeg/core';
 
+const ffmpeg = new FFmpeg();
+
+setTimeout(async () => {
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+});
+
 const presets = [
   {
     id: 'extract-audio',
@@ -221,9 +230,8 @@ const toggleOpt = (current, value) => {
 };
 
 const App = () => {
-  const [ffmpeg, setFfmpeg] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // const [loaded, setLoaded] = useState(false);
+  // const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState([]);
   const [inputFile, setInputFile] = useState(null);
   const [outputUrl, setOutputUrl] = useState(null);
@@ -244,19 +252,12 @@ const App = () => {
   useEffect(() => {
     (async () => {
       try {
-        const ff = new FFmpeg();
-        ff.on('log', ({ message }) => setLogs((p) => [...p.slice(-99), message]));
-        ff.on('progress', ({ progress: p }) => setProgress(Math.round(p * 100)));
-        await ff.load({
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        });
-        setFfmpeg(ff);
-        setLoaded(true);
+        ffmpeg.on('log', ({ message }) => setLogs((p) => [...p.slice(-99), message]));
+        ffmpeg.on('progress', ({ progress: p }) => setProgress(Math.round(p * 100)));
       } catch (e) {
         setError(e.message);
       }
-      setLoading(false);
+      // setLoading(false);
     })();
   }, []);
 
@@ -304,7 +305,7 @@ const App = () => {
             thumbs.push({ t, url: URL.createObjectURL(blob) });
           }
           await ff.deleteFile(`thumb_${t}.jpg`);
-        } catch (e) {}
+        } catch (e) { }
       }
 
       await ff.deleteFile(inputName);
@@ -393,10 +394,10 @@ const App = () => {
 
   return [
     h('div', { className: 'app' },
-      loading && h('div', { className: 'loading' }, 'loading ffmpeg core...'),
+      // loading && h('div', { className: 'loading' }, 'loading ffmpeg core...'),
       error && h('div', { className: 'error' }, error),
 
-      loaded && h('div', null,
+      h('div', null,
         h('h1', null, 'ffmpeg'),
 
         // presets
@@ -431,7 +432,7 @@ const App = () => {
           inputFile && h('div', { className: 'file-info' },
             inputFile.name, ' ', formatFileSize(inputFile.size)
           ),
-          
+
           // Thumbnails
           loadingThumbs && h('div', { className: 'thumb-strip loading' }, 'Generating thumbnails...'),
           !loadingThumbs && screenshots.length > 0 && h('div', { className: 'thumb-strip' },
