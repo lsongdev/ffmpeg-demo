@@ -1,4 +1,4 @@
-import { ready } from 'https://lsong.org/scripts/dom.js';
+import { ready } from 'https://lsong.org/scripts/dom/index.js';
 import { h, render, useState, useEffect, useRef } from 'https://lsong.org/scripts/react/index.js';
 import { FFmpeg } from './ffmpeg/index.js';
 import { fetchFile, toBlobURL } from './ffmpeg/util/index.js';
