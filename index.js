@@ -1,8 +1,8 @@
 import { ready } from 'https://lsong.org/scripts/dom/index.js';
 import { h, render, useState, useEffect, useRef } from 'https://lsong.org/scripts/react/index.js';
-import { FFmpeg } from './ffmpeg/index.js';
+import { FFmpeg } from './ffmpeg/classes.js?v=20261114';
 import { fetchFile } from './ffmpeg/util/index.js';
-import { loadEngine } from './engine.js';
+import { loadEngine } from './engine.js?v=20261114';
 
 const ffmpeg = new FFmpeg();
 
