@@ -25,6 +25,12 @@ export class FFmpeg {
      */
     #registerHandlers = () => {
         if (this.#worker) {
+            const fail = (event) => {
+                event.preventDefault();
+                this.terminate(new Error(event.message || "FFmpeg worker failed"));
+            };
+            this.#worker.onerror = fail;
+            this.#worker.onmessageerror = fail;
             this.#worker.onmessage = ({ data: { id, type, data }, }) => {
                 switch (type) {
                     case FFMessageType.LOAD:
@@ -183,11 +189,11 @@ export class FFmpeg {
      *
      * @category FFmpeg
      */
-    terminate = () => {
+    terminate = (reason = ERROR_TERMINATED) => {
         const ids = Object.keys(this.#rejects);
         // rejects all incomplete Promises.
         for (const id of ids) {
-            this.#rejects[id](ERROR_TERMINATED);
+            this.#rejects[id](reason);
             delete this.#rejects[id];
             delete this.#resolves[id];
         }

@@ -1,18 +1,10 @@
 import { ready } from 'https://lsong.org/scripts/dom/index.js';
 import { h, render, useState, useEffect, useRef } from 'https://lsong.org/scripts/react/index.js';
 import { FFmpeg } from './ffmpeg/index.js';
-import { fetchFile, toBlobURL } from './ffmpeg/util/index.js';
-
-const baseURL = './ffmpeg/core';
+import { fetchFile } from './ffmpeg/util/index.js';
+import { loadEngine } from './engine.js';
 
 const ffmpeg = new FFmpeg();
-
-setTimeout(async () => {
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-  });
-});
 
 const presets = [
   {
@@ -210,7 +202,63 @@ const getMimeType = (ext) => {
   return types[ext] || 'application/octet-stream';
 };
 
-const getFileExt = (name) => '.' + name.split('.').pop();
+const getFileExt = (name) => name.match(/\.[a-z0-9]+$/i)?.[0] || '';
+const describeError = (error) => error?.message || String(error);
+
+const waitForVideo = (video, event, signal) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => finish(new Error('视频预览读取超时。')), 8_000);
+  const ready = () => finish();
+  const failed = () => finish(new Error('浏览器无法读取此视频。'));
+  const aborted = () => finish(signal.reason);
+  function finish(error) {
+    clearTimeout(timer);
+    video.removeEventListener(event, ready);
+    video.removeEventListener('error', failed);
+    signal.removeEventListener('abort', aborted);
+    if (error) reject(error);
+    else resolve();
+  }
+  video.addEventListener(event, ready);
+  video.addEventListener('error', failed);
+  signal.addEventListener('abort', aborted);
+});
+
+const generateThumbnails = async (file, signal) => {
+  const video = document.createElement('video');
+  const canvas = document.createElement('canvas');
+  canvas.width = 200;
+  canvas.height = 120;
+  const context = canvas.getContext('2d');
+  const url = URL.createObjectURL(file);
+
+  try {
+    video.preload = 'auto';
+    const metadata = waitForVideo(video, 'loadedmetadata', signal);
+    video.src = url;
+    await metadata;
+    const { duration, videoWidth, videoHeight } = video;
+    if (!Number.isFinite(duration) || duration < 1 || !videoWidth || !videoHeight) return [];
+
+    const scale = Math.max(canvas.width / videoWidth, canvas.height / videoHeight);
+    const width = videoWidth * scale;
+    const height = videoHeight * scale;
+    const thumbs = [];
+    for (let i = 0; i < 12; i++) {
+      signal.throwIfAborted();
+      const t = duration * (i + 0.5) / 12;
+      const frame = waitForVideo(video, 'seeked', signal);
+      video.currentTime = t;
+      await frame;
+      context.drawImage(video, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+      thumbs.push({ t: Number(t.toFixed(1)), url: canvas.toDataURL('image/jpeg') });
+    }
+    return thumbs;
+  } finally {
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(url);
+  }
+};
 
 const toggleOpt = (current, value) => {
   const key = value.split(' ')[0];
@@ -230,91 +278,81 @@ const toggleOpt = (current, value) => {
 };
 
 const App = () => {
-  // const [loaded, setLoaded] = useState(false);
-  // const [loading, setLoading] = useState(true);
+  const [engine, setEngine] = useState({ phase: 'downloading', received: 0, total: 0 });
   const [logs, setLogs] = useState([]);
   const [inputFile, setInputFile] = useState(null);
-  const [outputUrl, setOutputUrl] = useState(null);
   const [outputInfo, setOutputInfo] = useState(null);
   const [preset, setPreset] = useState(presets[presets.length - 1]);
   const [globalOpts, setGlobalOpts] = useState('-loglevel info');
   const [inputOpts, setInputOpts] = useState('');
   const [outputOpts, setOutputOpts] = useState('');
   const [outputExt, setOutputExt] = useState('mp4');
-  const [progress, setProgress] = useState(0);
-  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [stage, setStage] = useState('');
   const [error, setError] = useState(null);
-  const inputRef = useRef(null);
+  const loadRef = useRef(null);
+  const runningRef = useRef(false);
+  const running = Boolean(stage);
 
   const [screenshots, setScreenshots] = useState([]);
   const [loadingThumbs, setLoadingThumbs] = useState(false);
+  const [thumbError, setThumbError] = useState(null);
+
+  const initialize = async () => {
+    if (loadRef.current) return;
+    const controller = new AbortController();
+    loadRef.current = controller;
+    setEngine({ phase: 'downloading', received: 0, total: 0 });
+    try {
+      await loadEngine(ffmpeg, controller,
+        (received, total) => setEngine({ phase: 'downloading', received, total }),
+        () => setEngine({ phase: 'initializing' }));
+      setEngine({ phase: 'ready' });
+    } catch (error) {
+      setEngine({ phase: 'failed', message: describeError(error) });
+    } finally {
+      loadRef.current = null;
+    }
+  };
 
   useEffect(() => {
-    (async () => {
-      try {
-        ffmpeg.on('log', ({ message }) => setLogs((p) => [...p.slice(-99), message]));
-        ffmpeg.on('progress', ({ progress: p }) => setProgress(Math.round(p * 100)));
-      } catch (e) {
-        setError(e.message);
+    const log = ({ message }) => setLogs((entries) => [...entries.slice(-99), message]);
+    const reportProgress = ({ progress }) => {
+      if (Number.isFinite(progress) && progress >= 0) {
+        setProgress(Math.min(99, Math.round(progress * 100)));
       }
-      // setLoading(false);
-    })();
+    };
+    ffmpeg.on('log', log);
+    ffmpeg.on('progress', reportProgress);
+    initialize();
+    return () => {
+      loadRef.current?.abort();
+      ffmpeg.off('log', log);
+      ffmpeg.off('progress', reportProgress);
+      ffmpeg.terminate();
+    };
   }, []);
 
-  const getVideoDuration = (file) => {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.onloadedmetadata = () => {
-        URL.revokeObjectURL(video.src);
-        resolve(video.duration);
-      };
-      video.src = URL.createObjectURL(file);
-    });
-  };
-
-  const generateThumbnails = async (file, ff) => {
-    if (!file || !ff || !file.type.startsWith('video/')) return;
-
+  useEffect(() => {
+    if (!inputFile?.type.startsWith('video/')) return;
+    const controller = new AbortController();
     setLoadingThumbs(true);
-    setScreenshots([]);
+    generateThumbnails(inputFile, controller.signal)
+      .then((thumbs) => {
+        if (!controller.signal.aborted) setScreenshots(thumbs);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setThumbError('无法生成视频缩略图，仍可尝试转换。');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingThumbs(false);
+      });
+    return () => controller.abort();
+  }, [inputFile]);
 
-    const inputName = 'thumb_input' + getFileExt(file.name);
-    const count = 12;
-
-    try {
-      const duration = await getVideoDuration(file);
-      if (!duration || duration < 1) {
-        setLoadingThumbs(false);
-        return;
-      }
-
-      const interval = duration / count;
-      const timestamps = Array.from({ length: count }, (_, i) => +(interval * (i + 0.5)).toFixed(1));
-
-      await ff.writeFile(inputName, await fetchFile(file));
-
-      const thumbs = [];
-      for (const t of timestamps) {
-        try {
-          if (t >= duration) break;
-          await ff.exec(['-ss', t.toString(), '-i', inputName, '-vframes', '1', `thumb_${t}.jpg`]);
-          const data = await ff.readFile(`thumb_${t}.jpg`);
-          if (data && data.length > 0) {
-            const blob = new Blob([data.buffer], { type: 'image/jpeg' });
-            thumbs.push({ t, url: URL.createObjectURL(blob) });
-          }
-          await ff.deleteFile(`thumb_${t}.jpg`);
-        } catch (e) { }
-      }
-
-      await ff.deleteFile(inputName);
-      setScreenshots(thumbs);
-    } catch (e) {
-      console.error('Thumbnail generation failed', e);
-    }
-    setLoadingThumbs(false);
-  };
+  useEffect(() => () => {
+    if (outputInfo) URL.revokeObjectURL(outputInfo.url);
+  }, [outputInfo]);
 
   const applyPreset = (p) => {
     setPreset(p);
@@ -322,9 +360,9 @@ const App = () => {
     setInputOpts(p.input);
     setOutputOpts(p.output);
     setOutputExt(p.ext);
-    setOutputUrl(null);
     setOutputInfo(null);
-    setProgress(0);
+    setProgress(null);
+    setError(null);
   };
 
   const parseArgs = (str) => {
@@ -345,19 +383,37 @@ const App = () => {
   };
 
   const run = async () => {
-    if (!inputFile || !ffmpeg) return;
-    setRunning(true);
-    setProgress(0);
-    setOutputUrl(null);
+    if (!inputFile || engine.phase !== 'ready' || runningRef.current) return;
+    if (!ffmpeg.loaded) {
+      setEngine({ phase: 'failed', message: '转换引擎已停止，请重新加载。' });
+      return;
+    }
+
+    const ext = outputExt.trim().toLowerCase();
+    if (!/^[a-z0-9]+$/.test(ext)) {
+      setError('请输入有效的输出格式，例如 mp3 或 mp4。');
+      return;
+    }
+    if (!inputFile.size) {
+      setError('所选文件为空，请选择其他文件。');
+      return;
+    }
+
+    runningRef.current = true;
+    setStage('正在读取文件…');
+    setProgress(null);
     setOutputInfo(null);
     setError(null);
     setLogs([]);
 
     const inName = 'input' + getFileExt(inputFile.name);
-    const outName = 'output.' + outputExt;
-
+    const outName = 'output.' + ext;
+    let failureMessage = '读取输入文件失败';
+    let inputWritten = false;
+    let conversionStarted = false;
     try {
       await ffmpeg.writeFile(inName, await fetchFile(inputFile));
+      inputWritten = true;
 
       const cmd = [
         ...parseArgs(globalOpts),
@@ -367,20 +423,33 @@ const App = () => {
         outName,
       ];
 
-      await ffmpeg.exec(cmd);
+      setStage('正在转换…');
+      failureMessage = '转换失败，请检查文件是否包含所需的音频或视频轨道，或查看下方日志';
+      conversionStarted = true;
+      const exitCode = await ffmpeg.exec(cmd);
+      if (exitCode !== 0) throw new Error(`FFmpeg 退出码 ${exitCode}`);
 
+      setStage('正在读取转换结果…');
+      failureMessage = '读取转换结果失败';
       const data = await ffmpeg.readFile(outName);
-      const blob = new Blob([data.buffer], { type: getMimeType(outputExt) });
+      if (!data.byteLength) throw new Error('输出文件为空');
+      const blob = new Blob([data], { type: getMimeType(ext) });
       const url = URL.createObjectURL(blob);
-      setOutputUrl(url);
-      setOutputInfo({ name: outName, size: blob.size, url });
-
-      await ffmpeg.deleteFile(inName);
-      await ffmpeg.deleteFile(outName);
-    } catch (e) {
-      setError(e.message);
+      setOutputInfo({ name: outName, size: blob.size, url, ext });
+    } catch (error) {
+      setError(`${failureMessage}（${describeError(error)}）。`);
+      if (!ffmpeg.loaded) {
+        setEngine({ phase: 'failed', message: '转换引擎已停止，请重新加载。' });
+      }
+    } finally {
+      const cleanup = [];
+      if (inputWritten) cleanup.push(ffmpeg.deleteFile(inName));
+      if (conversionStarted) cleanup.push(ffmpeg.deleteFile(outName));
+      await Promise.allSettled(cleanup);
+      runningRef.current = false;
+      setStage('');
+      setProgress(null);
     }
-    setRunning(false);
   };
 
   const commandPreview = [
@@ -394,154 +463,168 @@ const App = () => {
 
   return [
     h('div', { className: 'app' },
-      // loading && h('div', { className: 'loading' }, 'loading ffmpeg core...'),
-      error && h('div', { className: 'error' }, error),
-
       h('div', null,
         h('h1', null, 'ffmpeg'),
-
-        // presets
-        h('section', null,
-          h('label', null, 'preset'),
-          h('div', { className: 'presets' },
-            ...presets.map((p) =>
-              h('button', {
-                key: p.id,
-                className: preset.id === p.id ? 'active' : '',
-                onClick: () => applyPreset(p),
-              }, p.label)
-            )
-          )
+        h('div', { className: 'engine-status', role: 'status' },
+          engine.phase === 'downloading' && [
+            h('div', null, `正在下载 FFmpeg… ${formatFileSize(engine.received)}${engine.total
+              ? ` / ${formatFileSize(engine.total)}（${Math.floor(engine.received / engine.total * 100)}%）` : ''}`),
+            h('progress', { 'aria-label': 'FFmpeg 下载进度', max: engine.total || 1, value: engine.total ? engine.received : undefined }),
+          ],
+          engine.phase === 'initializing' && '正在初始化 FFmpeg…',
+          engine.phase === 'ready' && 'FFmpeg 已就绪',
+        ),
+        engine.phase === 'failed' && h('div', { className: 'engine-status error' },
+          h('div', { role: 'alert' }, `无法加载转换引擎。 ${engine.message}`),
+          h('button', { type: 'button', onClick: initialize }, '重新加载 FFmpeg'),
         ),
 
-        // input file
-        h('section', null,
-          h('label', null, 'input'),
-          h('input', {
-            ref: inputRef,
-            type: 'file',
-            onChange: (e) => {
-              setInputFile(e.target.files[0]);
-              setOutputUrl(null);
-              setOutputInfo(null);
-              if (e.target.files[0]) {
-                generateThumbnails(e.target.files[0], ffmpeg);
-              }
-            },
-          }),
-          inputFile && h('div', { className: 'file-info' },
-            inputFile.name, ' ', formatFileSize(inputFile.size)
-          ),
-
-          // Thumbnails
-          loadingThumbs && h('div', { className: 'thumb-strip loading' }, 'Generating thumbnails...'),
-          !loadingThumbs && screenshots.length > 0 && h('div', { className: 'thumb-strip' },
-            ...screenshots.map((thumb) =>
-              h('div', { className: 'thumb-item' },
-                h('img', { src: thumb.url }),
-                h('span', null, thumb.t + 's')
+        h('fieldset', { className: 'conversion-options', disabled: running },
+          // presets
+          h('section', null,
+            h('label', null, 'preset'),
+            h('div', { className: 'presets' },
+              ...presets.map((p) =>
+                h('button', {
+                  key: p.id,
+                  className: preset.id === p.id ? 'active' : '',
+                  onClick: () => applyPreset(p),
+                }, p.label)
               )
             )
           ),
-        ),
 
-        // global options
-        h('section', null,
-          h('label', null, 'global options'),
-          h('input', {
-            type: 'text',
-            value: globalOpts,
-            onChange: (e) => setGlobalOpts(e.target.value),
-            placeholder: '-loglevel info -y',
-          }),
-          h('div', { className: 'quick-btns' },
-            ...quickGlobal.map((q) =>
-              h('button', {
-                key: q.value,
-                onClick: () => setGlobalOpts(toggleOpt(globalOpts, q.value)),
-              }, q.label)
+          // input file
+          h('section', null,
+            h('label', null, 'input'),
+            h('input', {
+              type: 'file',
+              onChange: (e) => {
+                setInputFile(e.target.files[0] || null);
+                setOutputInfo(null);
+                setError(null);
+                setScreenshots([]);
+                setLoadingThumbs(false);
+                setThumbError(null);
+              },
+            }),
+            inputFile && h('div', { className: 'file-info' },
+              inputFile.name, ' ', formatFileSize(inputFile.size)
+            ),
+
+            // Thumbnails
+            loadingThumbs && h('div', { className: 'thumb-strip loading' }, '正在生成缩略图…'),
+            thumbError && h('div', { className: 'file-info', role: 'status' }, thumbError),
+            !loadingThumbs && screenshots.length > 0 && h('div', { className: 'thumb-strip' },
+              ...screenshots.map((thumb) =>
+                h('div', { className: 'thumb-item' },
+                  h('img', { src: thumb.url }),
+                  h('span', null, thumb.t + 's')
+                )
+              )
+            ),
+          ),
+
+          // global options
+          h('section', null,
+            h('label', null, 'global options'),
+            h('input', {
+              type: 'text',
+              value: globalOpts,
+              onChange: (e) => setGlobalOpts(e.target.value),
+              placeholder: '-loglevel info -y',
+            }),
+            h('div', { className: 'quick-btns' },
+              ...quickGlobal.map((q) =>
+                h('button', {
+                  key: q.value,
+                  onClick: () => setGlobalOpts(toggleOpt(globalOpts, q.value)),
+                }, q.label)
+              )
             )
-          )
-        ),
+          ),
 
-        // input options
-        h('section', null,
-          h('label', null, 'input options'),
-          h('input', {
-            type: 'text',
-            value: inputOpts,
-            onChange: (e) => setInputOpts(e.target.value),
-            placeholder: '-ss 00:00:00 -t 00:00:10',
-          }),
-          h('div', { className: 'quick-btns' },
-            ...quickInput.map((q) =>
-              h('button', {
-                key: q.value,
-                onClick: () => setInputOpts(toggleOpt(inputOpts, q.value)),
-              }, q.label)
+          // input options
+          h('section', null,
+            h('label', null, 'input options'),
+            h('input', {
+              type: 'text',
+              value: inputOpts,
+              onChange: (e) => setInputOpts(e.target.value),
+              placeholder: '-ss 00:00:00 -t 00:00:10',
+            }),
+            h('div', { className: 'quick-btns' },
+              ...quickInput.map((q) =>
+                h('button', {
+                  key: q.value,
+                  onClick: () => setInputOpts(toggleOpt(inputOpts, q.value)),
+                }, q.label)
+              )
             )
-          )
-        ),
+          ),
 
-        // output options
-        h('section', null,
-          h('label', null, 'output options'),
-          h('input', {
-            type: 'text',
-            value: outputOpts,
-            onChange: (e) => setOutputOpts(e.target.value),
-            placeholder: '-c:v libx264 -crf 23',
-          }),
-          h('div', { className: 'quick-btns' },
-            ...quickOutput.map((q) =>
-              h('button', {
-                key: q.value,
-                onClick: () => setOutputOpts(toggleOpt(outputOpts, q.value)),
-              }, q.label)
+          // output options
+          h('section', null,
+            h('label', null, 'output options'),
+            h('input', {
+              type: 'text',
+              value: outputOpts,
+              onChange: (e) => setOutputOpts(e.target.value),
+              placeholder: '-c:v libx264 -crf 23',
+            }),
+            h('div', { className: 'quick-btns' },
+              ...quickOutput.map((q) =>
+                h('button', {
+                  key: q.value,
+                  onClick: () => setOutputOpts(toggleOpt(outputOpts, q.value)),
+                }, q.label)
+              )
             )
-          )
-        ),
+          ),
 
-        // output extension
-        h('section', null,
-          h('label', null, 'output format'),
-          h('input', {
-            type: 'text',
-            value: outputExt,
-            onChange: (e) => setOutputExt(e.target.value),
-            placeholder: 'mp4',
-            style: { width: '80px' },
-          }),
-          h('div', { className: 'quick-btns' },
-            ...['mp4', 'webm', 'mov', 'avi', 'mkv', 'gif', 'mp3', 'wav', 'ogg', 'aac', 'flac', 'jpg', 'png'].map((ext) =>
-              h('button', {
-                key: ext,
-                onClick: () => setOutputExt(ext),
-              }, ext)
+          // output extension
+          h('section', null,
+            h('label', null, 'output format'),
+            h('input', {
+              type: 'text',
+              value: outputExt,
+              onChange: (e) => setOutputExt(e.target.value),
+              placeholder: 'mp4',
+              style: { width: '80px' },
+            }),
+            h('div', { className: 'quick-btns' },
+              ...['mp4', 'webm', 'mov', 'avi', 'mkv', 'gif', 'mp3', 'wav', 'ogg', 'aac', 'flac', 'jpg', 'png'].map((ext) =>
+                h('button', {
+                  key: ext,
+                  onClick: () => setOutputExt(ext),
+                }, ext)
+              )
             )
-          )
+          ),
+
+          // command preview
+          h('section', null,
+            h('label', null, 'command'),
+            h('pre', { className: 'command' }, commandPreview)
+          ),
         ),
 
-        // command preview
-        h('section', null,
-          h('label', null, 'command'),
-          h('pre', { className: 'command' }, commandPreview)
-        ),
-
-        // run button
         h('button', {
+          type: 'button',
           className: 'run-btn',
           onClick: run,
-          disabled: !inputFile || running,
-        }, running ? 'running...' : 'run'),
+          disabled: !inputFile || engine.phase !== 'ready' || running,
+        }, running ? stage : '开始转换'),
 
-        // progress
-        progress > 0 && h('div', { className: 'progress' },
-          progress + '%',
-          h('div', { className: 'bar' },
-            h('div', { style: { width: progress + '%' } })
-          )
+        h('div', { className: 'conversion-status', role: 'status' },
+          running && (progress === null ? stage : `${stage} ${progress}%`),
+          !running && outputInfo && '转换完成',
+          engine.phase === 'downloading' && 'FFmpeg 下载完成后即可转换。',
+          engine.phase === 'initializing' && '正在等待 FFmpeg 初始化。',
+          !running && !inputFile && engine.phase === 'ready' && '请选择要转换的文件。',
         ),
+        running && h('progress', { 'aria-label': '转换进度', max: 100, value: progress ?? undefined }),
+        error && h('div', { className: 'error', role: 'alert' }, error),
 
         // output
         outputInfo && h('section', null,
@@ -551,9 +634,9 @@ const App = () => {
             h('span', null, formatFileSize(outputInfo.size)),
             h('a', { href: outputInfo.url, download: outputInfo.name, className: 'btn' }, 'download')
           ),
-          outputExt.match(/mp4|webm|mov/) && h('video', { src: outputInfo.url, controls: true, style: { width: '100%' } }),
-          outputExt.match(/mp3|wav|ogg|aac|flac/) && h('audio', { src: outputInfo.url, controls: true, style: { width: '100%' } }),
-          outputExt.match(/jpg|jpeg|png/) && h('img', { src: outputInfo.url, style: { width: '100%' } })
+          /^(mp4|webm|mov)$/.test(outputInfo.ext) && h('video', { src: outputInfo.url, controls: true, style: { width: '100%' } }),
+          /^(mp3|wav|ogg|aac|flac)$/.test(outputInfo.ext) && h('audio', { src: outputInfo.url, controls: true, style: { width: '100%' } }),
+          /^(jpg|jpeg|png)$/.test(outputInfo.ext) && h('img', { src: outputInfo.url, style: { width: '100%' } })
         ),
 
         // logs
